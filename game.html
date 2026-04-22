@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dodge!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+      overflow: hidden;
+    }
+    h1 { font-size: 2rem; margin-bottom: 8px; letter-spacing: 4px; color: #00e5ff; text-shadow: 0 0 12px #00e5ff; }
+    #hud { display: flex; gap: 40px; margin-bottom: 12px; font-size: 1rem; }
+    #hud span { color: #aaa; }
+    #hud b { color: #00e5ff; }
+    #canvas {
+      border: 2px solid #00e5ff;
+      box-shadow: 0 0 20px #00e5ff44;
+      display: block;
+    }
+    #overlay {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      pointer-events: none;
+    }
+    #overlay h2 { font-size: 2.5rem; color: #ff4444; text-shadow: 0 0 16px #ff4444; }
+    #overlay p { color: #aaa; font-size: 1rem; }
+    #overlay .score-display { color: #00e5ff; font-size: 1.4rem; }
+    button {
+      pointer-events: all;
+      margin-top: 4px;
+      padding: 10px 32px;
+      background: transparent;
+      border: 2px solid #00e5ff;
+      color: #00e5ff;
+      font-family: inherit;
+      font-size: 1rem;
+      letter-spacing: 2px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.2s;
+    }
+    button:hover { background: #00e5ff22; }
+    #hint { margin-top: 10px; color: #555; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>DODGE!</h1>
+  <div id="hud">
+    <span>SCORE <b id="score">0</b></span>
+    <span>BEST <b id="best">0</b></span>
+    <span>LIVES <b id="lives">❤❤❤</b></span>
+  </div>
+  <div style="position:relative;">
+    <canvas id="canvas" width="480" height="520"></canvas>
+    <div id="overlay">
+      <h2 id="ol-title">DODGE!</h2>
+      <p id="ol-sub">Avoid the falling blocks. Survive as long as you can.</p>
+      <div class="score-display" id="ol-score" style="display:none"></div>
+      <button id="ol-btn">START</button>
+    </div>
+  </div>
+  <p id="hint">← → Arrow keys or A/D to move</p>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const scoreEl = document.getElementById('score');
+const bestEl  = document.getElementById('best');
+const livesEl = document.getElementById('lives');
+const overlay = document.getElementById('overlay');
+const olTitle = document.getElementById('ol-title');
+const olSub   = document.getElementById('ol-sub');
+const olScore = document.getElementById('ol-score');
+const olBtn   = document.getElementById('ol-btn');
+
+let state = 'idle'; // idle | playing | dead
+let score = 0, best = 0, lives = 3;
+let player, obstacles, particles, frameCount, spawnInterval, baseSpeed;
+let keys = {};
+
+function mkPlayer() {
+  return { x: W / 2, y: H - 60, w: 36, h: 22, speed: 5, inv: 0 };
+}
+
+function spawnObstacle() {
+  const w = 24 + Math.random() * 48;
+  const colors = ['#ff4444','#ff9900','#cc44ff','#ff44aa','#44ffcc'];
+  return {
+    x: Math.random() * (W - w),
+    y: -40,
+    w,
+    h: 18 + Math.random() * 14,
+    speed: baseSpeed + Math.random() * 2,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    rot: 0,
+    rotSpeed: (Math.random() - 0.5) * 0.08,
+  };
+}
+
+function spawnParticles(x, y, color, n = 10) {
+  for (let i = 0; i < n; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6,
+      life: 1,
+      decay: 0.04 + Math.random() * 0.04,
+      r: 3 + Math.random() * 4,
+      color,
+    });
+  }
+}
+
+function startGame() {
+  player = mkPlayer();
+  obstacles = [];
+  particles = [];
+  frameCount = 0;
+  score = 0;
+  lives = 3;
+  baseSpeed = 3;
+  spawnInterval = 60;
+  state = 'playing';
+  overlay.style.display = 'none';
+  scoreEl.textContent = '0';
+  livesEl.textContent = '❤❤❤';
+  loop();
+}
+
+function showOverlay(title, sub, scoreText) {
+  olTitle.textContent = title;
+  olSub.textContent = sub;
+  if (scoreText) {
+    olScore.style.display = '';
+    olScore.textContent = scoreText;
+  } else {
+    olScore.style.display = 'none';
+  }
+  olBtn.textContent = state === 'dead' ? 'RETRY' : 'START';
+  overlay.style.display = 'flex';
+}
+
+olBtn.addEventListener('click', startGame);
+
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'playing') startGame();
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// Touch / mobile
+let touchX = null;
+canvas.addEventListener('touchstart', e => { touchX = e.touches[0].clientX; }, { passive: true });
+canvas.addEventListener('touchmove', e => {
+  if (touchX === null) return;
+  const dx = e.touches[0].clientX - touchX;
+  if (player) player.x = Math.max(player.w/2, Math.min(W - player.w/2, player.x + dx));
+  touchX = e.touches[0].clientX;
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchend', () => { touchX = null; }, { passive: true });
+
+function update() {
+  frameCount++;
+  score++;
+  scoreEl.textContent = score;
+
+  // ramp difficulty
+  baseSpeed = 3 + Math.floor(score / 300) * 0.5;
+  spawnInterval = Math.max(20, 60 - Math.floor(score / 200) * 5);
+
+  // move player
+  if (keys['ArrowLeft'] || keys['a'] || keys['A']) player.x -= player.speed;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) player.x += player.speed;
+  player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+  if (player.inv > 0) player.inv--;
+
+  // spawn
+  if (frameCount % spawnInterval === 0) obstacles.push(spawnObstacle());
+
+  // update obstacles
+  obstacles = obstacles.filter(o => {
+    o.y += o.speed;
+    o.rot += o.rotSpeed;
+
+    // collision (AABB with some padding)
+    if (player.inv === 0) {
+      const px = player.x - player.w / 2, py = player.y - player.h / 2;
+      const ox = o.x, oy = o.y;
+      if (px < ox + o.w && px + player.w > ox && py < oy + o.h && py + player.h > oy) {
+        lives--;
+        player.inv = 90;
+        spawnParticles(player.x, player.y, '#ff4444', 14);
+        const hearts = ['', '❤', '❤❤', '❤❤❤'];
+        livesEl.textContent = lives > 0 ? hearts[lives] : '☠';
+        if (lives <= 0) { endGame(); return false; }
+        return false;
+      }
+    }
+    return o.y < H + 60;
+  });
+
+  // particles
+  particles = particles.filter(p => {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15;
+    p.life -= p.decay;
+    return p.life > 0;
+  });
+}
+
+function drawPlayer() {
+  const p = player;
+  if (p.inv > 0 && Math.floor(p.inv / 6) % 2 === 0) return; // blink
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  // body
+  const grad = ctx.createLinearGradient(-p.w/2, -p.h/2, p.w/2, p.h/2);
+  grad.addColorStop(0, '#00e5ff');
+  grad.addColorStop(1, '#0077ff');
+  ctx.fillStyle = grad;
+  ctx.shadowColor = '#00e5ff';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.moveTo(0, -p.h / 2 - 8);
+  ctx.lineTo(p.w / 2, p.h / 2);
+  ctx.lineTo(-p.w / 2, p.h / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawObstacles() {
+  for (const o of obstacles) {
+    ctx.save();
+    ctx.translate(o.x + o.w / 2, o.y + o.h / 2);
+    ctx.rotate(o.rot);
+    ctx.fillStyle = o.color;
+    ctx.shadowColor = o.color;
+    ctx.shadowBlur = 10;
+    ctx.fillRect(-o.w / 2, -o.h / 2, o.w, o.h);
+    ctx.restore();
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBg() {
+  ctx.clearRect(0, 0, W, H);
+  // subtle grid
+  ctx.strokeStyle = '#ffffff08';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+}
+
+let animId;
+function loop() {
+  if (state !== 'playing') return;
+  drawBg();
+  update();
+  drawObstacles();
+  drawParticles();
+  drawPlayer();
+  animId = requestAnimationFrame(loop);
+}
+
+function endGame() {
+  state = 'dead';
+  cancelAnimationFrame(animId);
+  if (score > best) { best = score; bestEl.textContent = best; }
+  // final draw
+  drawBg();
+  drawObstacles();
+  drawParticles();
+  showOverlay('GAME OVER', '', `SCORE: ${score}  •  BEST: ${best}`);
+}
+
+// initial screen
+showOverlay('DODGE!', 'Avoid the falling blocks. Survive as long as you can.', null);
+</script>
+</body>
+</html>
